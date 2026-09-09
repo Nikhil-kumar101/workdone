@@ -27,6 +27,50 @@ import "@livekit/components-styles";
 
 import api from "../services/api";
 import "./MeetingRoom.css";
+const normalizeRoomId = (value) => {
+  if (!value) {
+    return "";
+  }
+
+  const raw = String(value).trim();
+
+  // Full URL:
+  // http://localhost:5173/meeting/95e8de488ff1
+  try {
+    const url = new URL(raw);
+
+    const match =
+      url.pathname.match(
+        /\/meeting\/([^/?#]+)$/i
+      );
+
+    if (match?.[1]) {
+      return decodeURIComponent(
+        match[1]
+      );
+    }
+  } catch {
+    // Not a full URL.
+  }
+
+  // /meeting/95e8de488ff1
+  const match =
+    raw.match(
+      /\/meeting\/([^/?#\s]+)/i
+    );
+
+  if (match?.[1]) {
+    return decodeURIComponent(
+      match[1]
+    );
+  }
+
+  // Normal value:
+  // 95e8de488ff1
+  return raw
+    .replace(/^\/+|\/+$/g, "")
+    .split(/[?#/]/)[0];
+};
 
 
 // ==========================================
@@ -1472,8 +1516,22 @@ function MeetingControls({
 // ==========================================
 
 function MeetingRoom() {
-  const { roomId } =
-    useParams();
+  const {
+    roomId: routeRoomId,
+  } = useParams();
+
+  const roomId =
+    normalizeRoomId(routeRoomId);
+
+  console.log(
+    "Route room ID:",
+    routeRoomId
+  );
+
+  console.log(
+    "Normalized room ID:",
+    roomId
+  );
 
   const [
     elapsedSeconds,
@@ -1559,37 +1617,95 @@ function MeetingRoom() {
         setLoading(true);
         setError("");
 
-        console.log("Joining room:", roomId);
+        if (!roomId) {
+          throw new Error(
+            "Meeting room ID is missing."
+          );
+        }
 
-        const [meetingResponse, tokenResponse] =
-          await Promise.all([
-            api.get(`/meetings/${roomId}`),
-            api.post(`/livekit/${roomId}/token`),
-          ]);
+        console.log(
+          "Route room ID:",
+          routeRoomId
+        );
+
+        console.log(
+          "Normalized room ID:",
+          roomId
+        );
+
+        const encodedRoomId =
+          encodeURIComponent(roomId);
+
+        // Get meeting details first.
+        // This keeps the error clear if the room does not exist.
+        const meetingResponse =
+          await api.get(
+            `/meetings/${encodedRoomId}`
+          );
 
         if (cancelled) {
           return;
         }
 
-        console.log("Meeting:", meetingResponse.data);
-        console.log("LiveKit response:", tokenResponse.data);
+        console.log(
+          "Meeting response:",
+          meetingResponse.data
+        );
 
-        const meetingData = meetingResponse.data?.meeting;
-        const liveKitData = tokenResponse.data;
+        const meetingData =
+          meetingResponse.data?.meeting;
 
-        if (!meetingData || !liveKitData?.token || !liveKitData?.url) {
-          throw new Error("Meeting credentials are incomplete.");
+        if (!meetingData) {
+          throw new Error(
+            "Meeting information was not returned by the server."
+          );
         }
 
         setMeeting(meetingData);
-        setToken(liveKitData.token);
-        setServerUrl(liveKitData.url);
+
+        // Get LiveKit credentials after the meeting is verified.
+        const tokenResponse =
+          await api.post(
+            `/livekit/${encodedRoomId}/token`
+          );
+
+        if (cancelled) {
+          return;
+        }
+
+        console.log(
+          "LiveKit response:",
+          tokenResponse.data
+        );
+
+        const liveKitData =
+          tokenResponse.data;
+
+        if (
+          !liveKitData?.token ||
+          !liveKitData?.url
+        ) {
+          throw new Error(
+            "Meeting credentials are incomplete."
+          );
+        }
+
+        setToken(
+          liveKitData.token
+        );
+
+        setServerUrl(
+          liveKitData.url
+        );
       } catch (error) {
         if (cancelled) {
           return;
         }
 
-        console.error("JOIN MEETING ERROR:", error);
+        console.error(
+          "JOIN MEETING ERROR:",
+          error
+        );
 
         setError(
           error.response?.data?.message ||
@@ -1608,7 +1724,10 @@ function MeetingRoom() {
     return () => {
       cancelled = true;
     };
-  }, [roomId]);
+  }, [
+    roomId,
+    routeRoomId,
+  ]);
 
   if (loading) {
     return (
